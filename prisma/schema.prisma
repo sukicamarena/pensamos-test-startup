@@ -1,0 +1,419 @@
+// Schema de Prisma para pandunesiosss
+// Red social para parejas con sistema de reconciliación automática
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// USUARIOS
+// ─────────────────────────────────────────────
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  username          String    @unique
+  passwordHash      String
+  displayName       String
+  avatarUrl         String?
+  bio               String?
+  birthDate         DateTime?
+  phoneNumber       String?
+  isEmailVerified   Boolean   @default(false)
+  isPhoneVerified   Boolean   @default(false)
+  isActive          Boolean   @default(true)
+  lastSeenAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relación de pareja — el usuario puede ser partner1 o partner2
+  coupleAsPartner1  Couple[]  @relation("CouplePartner1")
+  coupleAsPartner2  Couple[]  @relation("CouplePartner2")
+
+  // Invitaciones de pareja enviadas y recibidas
+  sentInvitations      CoupleInvitation[] @relation("InvitationSender")
+  receivedInvitations  CoupleInvitation[] @relation("InvitationReceiver")
+
+  // Recuerdos subidos por el usuario
+  uploadedMemories  Memory[]  @relation("MemoryUploader")
+
+  // Estado de enojo activo del usuario
+  angerEvents       AngerEvent[]
+
+  // Notificaciones
+  notifications     Notification[]
+
+  // Dispositivos para push notifications
+  devices           UserDevice[]
+
+  // Sesiones activas
+  sessions          Session[]
+
+  // Reacciones a recuerdos
+  memoryReactions   MemoryReaction[]
+
+  // Mensajes de amor personalizados creados por el usuario
+  customLoveMessages LoveMessage[]
+
+  @@index([email])
+  @@index([username])
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// SESIONES DE AUTENTICACIÓN
+// ─────────────────────────────────────────────
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  token        String   @unique
+  refreshToken String   @unique
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([refreshToken])
+  @@index([userId])
+  @@map("sessions")
+}
+
+// ─────────────────────────────────────────────
+// DISPOSITIVOS DE USUARIO (para push notifications)
+// ─────────────────────────────────────────────
+
+model UserDevice {
+  id           String    @id @default(cuid())
+  userId       String
+  pushToken    String    @unique
+  platform     Platform
+  deviceModel  String?
+  appVersion   String?
+  isActive     Boolean   @default(true)
+  lastUsedAt   DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([pushToken])
+  @@map("user_devices")
+}
+
+enum Platform {
+  IOS
+  ANDROID
+  WEB
+}
+
+// ─────────────────────────────────────────────
+// PAREJAS
+// ─────────────────────────────────────────────
+
+model Couple {
+  id           String      @id @default(cuid())
+  partner1Id   String
+  partner2Id   String
+  status       CoupleStatus @default(ACTIVE)
+  anniversaryDate DateTime?
+  coupleNickname  String?   // Apodo de la pareja, ej: "Los Tortolitos"
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  partner1 User @relation("CouplePartner1", fields: [partner1Id], references: [id])
+  partner2 User @relation("CouplePartner2", fields: [partner2Id], references: [id])
+
+  // Recuerdos compartidos de la pareja
+  memories     Memory[]
+
+  // Eventos de enojo dentro de la pareja
+  angerEvents  AngerEvent[]
+
+  // Sesiones de reconciliación
+  reconciliationSessions ReconciliationSession[]
+
+  // Mensajes de amor personalizados de la pareja
+  customLoveMessages LoveMessage[]
+
+  // Estadísticas de la pareja
+  stats        CoupleStats?
+
+  @@unique([partner1Id, partner2Id])
+  @@index([partner1Id])
+  @@index([partner2Id])
+  @@index([status])
+  @@map("couples")
+}
+
+enum CoupleStatus {
+  ACTIVE        // Pareja activa y feliz
+  IN_FIGHT      // Actualmente peleando
+  RECONCILING   // En proceso de reconciliación
+  SEPARATED     // Se separaron
+}
+
+// ─────────────────────────────────────────────
+// INVITACIONES DE PAREJA
+// ─────────────────────────────────────────────
+
+model CoupleInvitation {
+  id          String           @id @default(cuid())
+  senderId    String
+  receiverId  String?          // Puede ser null si se invita por link
+  inviteCode  String           @unique
+  inviteLink  String?
+  status      InvitationStatus @default(PENDING)
+  message     String?          // Mensaje personalizado de invitación
+  expiresAt   DateTime
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  sender   User  @relation("InvitationSender", fields: [senderId], references: [id])
+  receiver User? @relation("InvitationReceiver", fields: [receiverId], references: [id])
+
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([inviteCode])
+  @@index([status])
+  @@map("couple_invitations")
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+// ─────────────────────────────────────────────
+// RECUERDOS (fotos, videos, notas de amor)
+// ─────────────────────────────────────────────
+
+model Memory {
+  id           String      @id @default(cuid())
+  coupleId     String
+  uploaderId   String
+  type         MemoryType
+  title        String?
+  description  String?
+  mediaUrl     String?     // URL en S3/Cloudflare R2
+  thumbnailUrl String?
+  mediaMimeType String?
+  mediaSize    Int?        // Tamaño en bytes
+  duration     Int?        // Duración en segundos (para videos/audios)
+  location     String?     // Lugar donde fue tomado
+  takenAt      DateTime?   // Fecha original del recuerdo
+  isPrivate    Boolean     @default(false)
+  // Tags emocionales para filtrar recuerdos al reconectar
+  emotionTags  String[]    @default([])
+  viewCount    Int         @default(0)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  couple   Couple @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+  uploader User   @relation("MemoryUploader", fields: [uploaderId], references: [id])
+
+  // Reacciones al recuerdo
+  reactions MemoryReaction[]
+
+  // Cuántas veces fue enviado durante reconciliaciones
+  reconciliationUses ReconciliationMemory[]
+
+  @@index([coupleId])
+  @@index([uploaderId])
+  @@index([type])
+  @@index([takenAt])
+  @@map("memories")
+}
+
+enum MemoryType {
+  PHOTO        // Foto
+  VIDEO        // Video
+  VOICE_NOTE   // Nota de voz
+  TEXT_NOTE    // Nota de texto / carta de amor
+  LOCATION     // Lugar especial
+}
+
+// ─────────────────────────────────────────────
+// REACCIONES A RECUERDOS
+// ─────────────────────────────────────────────
+
+model MemoryReaction {
+  id        String       @id @default(cuid())
+  memoryId  String
+  userId    String
+  emoji     String       // ❤️ 😍 😭 😂 🥰
+  createdAt DateTime     @default(now())
+
+  memory Memory @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([memoryId, userId])
+  @@index([memoryId])
+  @@index([userId])
+  @@map("memory_reactions")
+}
+
+// ─────────────────────────────────────────────
+// EVENTOS DE ENOJO — el corazón del producto
+// ─────────────────────────────────────────────
+
+model AngerEvent {
+  id          String       @id @default(cuid())
+  coupleId    String
+  userId      String       // Quién pulsó el botón
+  intensity   AngerLevel   @default(MEDIUM)
+  reason      String?      // Razón opcional del enojo
+  status      AngerStatus  @default(ACTIVE)
+  resolvedAt  DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  couple Couple @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id])
+
+  // Sesión de reconciliación generada por este evento
+  reconciliationSession ReconciliationSession?
+
+  @@index([coupleId])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("anger_events")
+}
+
+enum AngerLevel {
+  MILD    // Un poquito molest@ (manda 3 recuerdos)
+  MEDIUM  // Moderadamente enojad@ (manda 5 recuerdos + mensajes)
+  HIGH    // Muy enojad@ (manda 7 recuerdos + mensajes + sorpresa)
+}
+
+enum AngerStatus {
+  ACTIVE       // El enojo está activo
+  RECONCILING  // En proceso de reconciliación
+  RESOLVED     // Ya se reconciliaron
+  EXPIRED      // El evento expiró sin resolverse
+}
+
+// ─────────────────────────────────────────────
+// SESIONES DE RECONCILIACIÓN
+// ─────────────────────────────────────────────
+
+model ReconciliationSession {
+  id            String              @id @default(cuid())
+  coupleId      String
+  angerEventId  String              @unique
+  status        ReconciliationStatus @default(IN_PROGRESS)
+  startedAt     DateTime            @default(now())
+  completedAt   DateTime?
+  // Si ambos confirmaron que se reconciliaron
+  partner1Confirmed Boolean          @default(false)
+  partner2Confirmed Boolean          @default(false)
+  // Mensaje de amor generado por IA o preescrito
+  generatedMessage  String?
+  // Recuerdos enviados en esta sesión
+  memoriesSent  ReconciliationMemory[]
+
+  couple      Couple     @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+  angerEvent  AngerEvent @relation(fields: [angerEventId], references: [id])
+
+  @@index([coupleId])
+  @@index([status])
+  @@map("reconciliation_sessions")
+}
+
+enum ReconciliationStatus {
+  IN_PROGRESS  // Enviando recuerdos y mensajes
+  WAITING      // Esperando confirmación de ambos
+  COMPLETED    // Se reconciliaron ❤️
+  FAILED       // No funcionó esta vez
+}
+
+// ─────────────────────────────────────────────
+// RECUERDOS ENVIADOS EN UNA RECONCILIACIÓN
+// ─────────────────────────────────────────────
+
+model ReconciliationMemory {
+  id                    String   @id @default(cuid())
+  reconciliationId      String
+  memoryId              String
+  sentAt                DateTime @default(now())
+  // Cuánto resonó con la pareja
+  partner1Reacted       Boolean  @default(false)
+  partner2Reacted       Boolean  @default(false)
+
+  reconciliationSession ReconciliationSession @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+  memory                Memory                @relation(fields: [memoryId], references: [id])
+
+  @@index([reconciliationId])
+  @@index([memoryId])
+  @@map("reconciliation_memories")
+}
+
+// ─────────────────────────────────────────────
+// MENSAJES DE AMOR
+// ─────────────────────────────────────────────
+
+model LoveMessage {
+  id         String          @id @default(cuid())
+  coupleId   String?         // null = mensaje global del sistema
+  authorId   String?         // null = mensaje del sistema
+  content    String
+  category   MessageCategory
+  language   String          @default("es")
+  isSystem   Boolean         @default(false)
+  isActive   Boolean         @default(true)
+  usageCount Int             @default(0)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  couple Couple? @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+  author User?   @relation(fields: [authorId], references: [id])
+
+  @@index([coupleId])
+  @@index([category])
+  @@index([isSystem])
+  @@map("love_messages")
+}
+
+enum MessageCategory {
+  APOLOGY       // Mensajes de disculpa
+  AFFIRMATION   // Afirmaciones de amor
+  MEMORY_RECALL // Recuerdos felices
+  GRATITUDE     // Gratitud hacia la pareja
+  FUTURE        // Planes y sueños juntos
+  FUNNY         // Para parejas que hacen las paces con humor
+}
+
+// ─────────────────────────────────────────────
+// ESTADÍSTICAS DE LA PAREJA
+// ─────────────────────────────────────────────
+
+model CoupleStats {
+  id                    String   @id @default(cuid())
+  coupleId              String   @unique
+  totalFights           Int      @default(0)
+  totalReconciliations  Int      @default(0)
+  averageReconciliationTimeMinutes Int @default(0)
+  longestFightMinutes   Int      @default(0)
+  fastestReconciliationMinutes Int @default(0)
+  totalMemories         Int      @default(0)
+  totalLoveMessagesSent Int      @default(0)
+  lastFightAt           DateTime?
+  lastReconciliationAt  DateTime?
+  // Racha de días sin peleas
+  currentPeaceStreakDays Int     @default(0)
+  longestPeaceStreakDays Int     @default(0)
+  updatedAt             DateTime @updatedAt
+
+  couple Couple @relation(fields: [coupleId], references: [id
